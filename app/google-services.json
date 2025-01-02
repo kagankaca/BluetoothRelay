@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "162974135883",
+    "project_id": "bluetoothrelay-3b7ba",
+    "storage_bucket": "bluetoothrelay-3b7ba.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:162974135883:android:9067cb414efc7b1fad3fce",
+        "android_client_info": {
+          "package_name": "com.example.bluetoothrelay"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBhYdhz214IjaztHUeMYNV5yFexTki8tCM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
