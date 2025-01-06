@@ -21,6 +21,11 @@ import com.example.bluetoothrelay.viewmodel.MainViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.MultiplePermissionsState
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.text.style.TextAlign  // For TextAlign
+import com.google.accompanist.permissions.rememberPermissionState // For rememberPermissionState
+import com.google.accompanist.permissions.PermissionState // For PermissionState type
+import com.google.accompanist.permissions.PermissionStatus
 
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -35,27 +40,37 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val permissionsState = rememberMultiplePermissionsState(
-                        permissions = listOf(
-                            Manifest.permission.BLUETOOTH,
-                            Manifest.permission.BLUETOOTH_ADMIN,
-                            Manifest.permission.BLUETOOTH_CONNECT,
-                            Manifest.permission.BLUETOOTH_SCAN,
-                            Manifest.permission.ACCESS_FINE_LOCATION
-                        )
-                    )
-
+                    val currentPermissionRequest by viewModel.currentPermissionRequest.collectAsState()
                     val uiState by viewModel.uiState.collectAsState()
 
-                    when {
-                        !permissionsState.allPermissionsGranted -> {
-                            PermissionsScreen(permissionsState)
-                        }
-                        else -> {
+                    when (val permission = currentPermissionRequest) {
+                        null -> {
                             when (uiState) {
                                 is MainViewModel.UiState.Registration -> RegistrationScreen(viewModel)
                                 is MainViewModel.UiState.Chat -> ChatScreen(viewModel)
                             }
+                        }
+                        else -> {
+                            val permissionState = rememberPermissionState(permission = permission)
+
+                            LaunchedEffect(permissionState.status) {
+                                if (permissionState.status is PermissionStatus.Granted) {
+                                    viewModel.onPermissionGranted(permission)
+                                }
+                            }
+
+                            val permissionText = when (permission) {
+                                Manifest.permission.ACCESS_FINE_LOCATION -> "Location"
+                                Manifest.permission.BLUETOOTH_SCAN -> "Bluetooth Scan"
+                                Manifest.permission.BLUETOOTH_CONNECT -> "Bluetooth Connect"
+                                else -> "Permission"
+                            }
+
+                            PermissionsScreenContent(
+                                title = "$permissionText Permission Required",
+                                description = "$permissionText permission is required for Bluetooth functionality",
+                                onRequestPermission = { permissionState.launchPermissionRequest() }
+                            )
                         }
                     }
                 }
@@ -64,9 +79,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalPermissionsApi::class)
+
 @Composable
-fun PermissionsScreen(permissionsState: MultiplePermissionsState) {
+private fun PermissionsScreenContent(
+    title: String,
+    description: String,
+    onRequestPermission: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -75,15 +94,24 @@ fun PermissionsScreen(permissionsState: MultiplePermissionsState) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Bluetooth permissions are required for this app",
-            style = MaterialTheme.typography.bodyLarge
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { permissionsState.launchMultiplePermissionRequest() }) {
-            Text("Grant Permissions")
+        Button(onClick = onRequestPermission) {
+            Text("Grant Permission")
         }
     }
 }
+
+
 @Composable
 fun RegistrationScreen(viewModel: MainViewModel) {
     var username by remember { mutableStateOf("") }

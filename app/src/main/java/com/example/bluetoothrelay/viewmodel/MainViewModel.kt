@@ -1,5 +1,6 @@
 package com.example.bluetoothrelay.viewmodel
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
 import android.net.ConnectivityManager
@@ -16,7 +17,6 @@ import com.example.bluetoothrelay.util.PreferencesManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -30,6 +30,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    private val _currentPermissionRequest = MutableStateFlow<String?>(Manifest.permission.ACCESS_FINE_LOCATION)
+    val currentPermissionRequest: StateFlow<String?> = _currentPermissionRequest.asStateFlow()
 
     // Expose the StateFlows from BluetoothService
     val connectionState: StateFlow<ConnectionState> = bluetoothService.connectionState
@@ -48,31 +51,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     is ConnectionState.Disconnected -> _isScanning.value = false
                     is ConnectionState.Error -> {
                         _isScanning.value = false
-                        // Handle error state if needed
                     }
                 }
-            }
-        }
-
-        // Check for existing username
-        viewModelScope.launch {
-            _username.value = preferencesManager.getUsername()
-            _uiState.value = if (_username.value != null) {
-                startScanning() // Start scanning if user already exists
-                UiState.Chat
-            } else {
-                UiState.Registration
             }
         }
 
         setupNetworkCallback()
     }
 
+    fun onPermissionGranted(permission: String) {
+        when (permission) {
+            Manifest.permission.ACCESS_FINE_LOCATION -> {
+                _currentPermissionRequest.value = Manifest.permission.BLUETOOTH_SCAN
+            }
+            Manifest.permission.BLUETOOTH_SCAN -> {
+                _currentPermissionRequest.value = Manifest.permission.BLUETOOTH_CONNECT
+            }
+            Manifest.permission.BLUETOOTH_CONNECT -> {
+                _currentPermissionRequest.value = null
+                onAllPermissionsGranted()
+            }
+        }
+    }
+
+    private fun onAllPermissionsGranted() {
+        viewModelScope.launch {
+            val username = preferencesManager.getUsername()
+            _username.value = username
+            _uiState.value = if (username != null) {
+                startScanning()
+                UiState.Chat
+            } else {
+                UiState.Registration
+            }
+        }
+    }
+
     fun setUsername(name: String) {
         preferencesManager.saveUsername(name)
         _username.value = name
         _uiState.value = UiState.Chat
-        // Start scanning for devices once username is set
         startScanning()
     }
 
@@ -98,13 +116,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendMessage(receiverUsername: String, content: String) {
         val currentUsername = _username.value ?: return
-
         val message = Message(
             sender = currentUsername,
             receiver = receiverUsername,
             content = content
         )
-
         viewModelScope.launch {
             bluetoothService.sendMessage(message)
         }

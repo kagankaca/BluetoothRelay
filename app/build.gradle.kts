@@ -67,6 +67,8 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
+    implementation(libs.accompanist.permissions)
+
     // ViewModel
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
