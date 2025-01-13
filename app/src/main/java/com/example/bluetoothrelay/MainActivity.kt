@@ -1,6 +1,8 @@
 package com.example.bluetoothrelay
 
+import DeviceInfo
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,19 +15,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.bluetoothrelay.model.BluetoothDeviceInfo
-import com.example.bluetoothrelay.model.ConnectionState
 import com.example.bluetoothrelay.model.Message
 import com.example.bluetoothrelay.ui.theme.BluetoothRelayTheme
 import com.example.bluetoothrelay.viewmodel.MainViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.MultiplePermissionsState
-import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.text.style.TextAlign  // For TextAlign
+import com.example.bluetoothrelay.model.ConnectionState
 import com.google.accompanist.permissions.rememberPermissionState // For rememberPermissionState
-import com.google.accompanist.permissions.PermissionState // For PermissionState type
-import com.google.accompanist.permissions.PermissionStatus
+import kotlinx.coroutines.delay
 
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -43,33 +41,47 @@ class MainActivity : ComponentActivity() {
                     val currentPermissionRequest by viewModel.currentPermissionRequest.collectAsState()
                     val uiState by viewModel.uiState.collectAsState()
 
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            // Reset state when activity is destroyed
+                            viewModel.resetPermissionState()
+                        }
+                    }
+
                     when (val permission = currentPermissionRequest) {
                         null -> {
-                            when (uiState) {
-                                is MainViewModel.UiState.Registration -> RegistrationScreen(viewModel)
-                                is MainViewModel.UiState.Chat -> ChatScreen(viewModel)
+                            // Only show ChatScreen if we have the required permission
+                            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                                == PackageManager.PERMISSION_GRANTED) {
+                                when (uiState) {
+                                    is MainViewModel.UiState.Registration -> RegistrationScreen(viewModel)
+                                    is MainViewModel.UiState.Chat -> ChatScreen(viewModel)
+                                }
+                            } else {
+                                // If we don't have permission, request it
+                                LaunchedEffect(Unit) {
+                                    viewModel.retryConnection()
+                                }
                             }
                         }
                         else -> {
-                            val permissionState = rememberPermissionState(permission = permission)
-
-                            LaunchedEffect(permissionState.status) {
-                                if (permissionState.status is PermissionStatus.Granted) {
+                            val permissionState = rememberPermissionState(permission) { isGranted ->
+                                if (isGranted) {
                                     viewModel.onPermissionGranted(permission)
                                 }
                             }
 
-                            val permissionText = when (permission) {
-                                Manifest.permission.ACCESS_FINE_LOCATION -> "Location"
-                                Manifest.permission.BLUETOOTH_SCAN -> "Bluetooth Scan"
-                                Manifest.permission.BLUETOOTH_CONNECT -> "Bluetooth Connect"
-                                else -> "Permission"
+                            LaunchedEffect(Unit) {
+                                delay(500)  // Add small delay for better UX
+                                permissionState.launchPermissionRequest()
                             }
 
                             PermissionsScreenContent(
-                                title = "$permissionText Permission Required",
-                                description = "$permissionText permission is required for Bluetooth functionality",
-                                onRequestPermission = { permissionState.launchPermissionRequest() }
+                                title = "Location Permission Required",
+                                description = "Location permission is required for WiFi Direct functionality. Please grant it to continue.",
+                                onRequestPermission = {
+                                    permissionState.launchPermissionRequest()
+                                }
                             )
                         }
                     }
@@ -78,6 +90,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+    private fun getPermissionText(permission: String): String {
+        return when (permission) {
+            Manifest.permission.ACCESS_FINE_LOCATION -> "Location"
+            Manifest.permission.NEARBY_WIFI_DEVICES -> "Nearby Devices"
+            else -> "Required"
+        }
+    }
 
 
 @Composable
@@ -152,7 +172,7 @@ fun ChatScreen(viewModel: MainViewModel) {
     var receiver by remember { mutableStateOf("") }
     val messages = viewModel.messages.collectAsState(initial = emptyList())
     val connectionState = viewModel.connectionState.collectAsState()
-    val discoveredDevices = viewModel.discoveredDevices.collectAsState(initial = emptyList())
+    val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
     val username by viewModel.username.collectAsState()
 
@@ -172,100 +192,127 @@ fun ChatScreen(viewModel: MainViewModel) {
                 Text("Username: ${username ?: "Not set"}")
                 Text("Scanning: ${if (isScanning) "Yes" else "No"}")
                 Text("Connection: ${connectionState.value}")
-                Text("Discovered Devices: ${discoveredDevices.value.size}")
+                Text("Discovered Devices: ${discoveredDevices.size}")
             }
         }
 
-        // Scan Control Button
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Button(
-                onClick = {
-                    if (isScanning) viewModel.stopScanning()
-                    else viewModel.startScanning()
-                }
-            ) {
-                Text(if (isScanning) "Stop Scanning" else "Start Scanning")
-            }
-        }
-
-        // Device List
-        Text(
-            "Discovered Devices",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            items(discoveredDevices.value) { device ->
-                DeviceItem(device) {
-                    viewModel.connectToDevice(device.address)
+        when (val state = connectionState.value) {
+            is ConnectionState.Error -> {
+                if (state.message == "Missing required permissions") {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Additional permissions are required",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(onClick = { viewModel.retryConnection() }) {
+                                Text("Grant Permissions")
+                            }
+                        }
+                    }
                 }
             }
-        }
+            else -> {
+                // Scan Control Button
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Button(
+                        onClick = {
+                            if (isScanning) viewModel.stopScanning()
+                            else viewModel.startScanning()
+                        }
+                    ) {
+                        Text(if (isScanning) "Stop Scanning" else "Start Scanning")
+                    }
+                }
 
-        Spacer(modifier = Modifier.height(8.dp))
+                // Device List
+                Text(
+                    "Discovered Devices",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    items(discoveredDevices) { device ->
+                        DeviceItem(device) {
+                            viewModel.connectToDevice(device)
+                        }
+                    }
+                }
 
-        // Messages
-        Text(
-            "Messages",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(vertical = 8.dp)
-        )
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            items(messages.value) { message ->
-                MessageItem(message)
-            }
-        }
+                Spacer(modifier = Modifier.height(8.dp))
 
-        // Message Input
-        OutlinedTextField(
-            value = receiver,
-            onValueChange = { receiver = it },
-            label = { Text("Receiver Username") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+                // Messages
+                Text(
+                    "Messages",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                ) {
+                    items(messages.value) { message ->
+                        MessageItem(message)
+                    }
+                }
 
-        Spacer(modifier = Modifier.height(8.dp))
+                // Message Input
+                OutlinedTextField(
+                    value = receiver,
+                    onValueChange = { receiver = it },
+                    label = { Text("Receiver Username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            OutlinedTextField(
-                value = message,
-                onValueChange = { message = it },
-                label = { Text("Message") },
-                modifier = Modifier.weight(1f)
-            )
+                Spacer(modifier = Modifier.height(8.dp))
 
-            Spacer(modifier = Modifier.width(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    OutlinedTextField(
+                        value = message,
+                        onValueChange = { message = it },
+                        label = { Text("Message") },
+                        modifier = Modifier.weight(1f)
+                    )
 
-            Button(
-                onClick = {
-                    viewModel.sendMessage(receiver, message)
-                    message = ""
-                },
-                enabled = message.isNotBlank() && receiver.isNotBlank()
-            ) {
-                Text("Send")
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Button(
+                        onClick = {
+                            viewModel.sendMessage(receiver, message)
+                            message = ""
+                        },
+                        enabled = message.isNotBlank() && receiver.isNotBlank()
+                    ) {
+                        Text("Send")
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-fun DeviceItem(device: BluetoothDeviceInfo, onConnect: () -> Unit) {
+fun DeviceItem(device: DeviceInfo, onConnect: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()

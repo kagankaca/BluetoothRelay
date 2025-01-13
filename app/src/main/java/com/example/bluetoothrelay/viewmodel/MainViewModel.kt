@@ -9,18 +9,25 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.bluetoothrelay.model.BluetoothDeviceInfo
 import com.example.bluetoothrelay.model.ConnectionState
+import DeviceInfo
+import android.content.pm.PackageManager
 import com.example.bluetoothrelay.model.Message
-import com.example.bluetoothrelay.service.BluetoothService
+import com.example.bluetoothrelay.service.WiFiDirectService
 import com.example.bluetoothrelay.util.PreferencesManager
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+import android.os.Build
+import android.os.Build.VERSION_CODES
+import androidx.core.app.ActivityCompat
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    private val bluetoothService = BluetoothService(application)
+    private val wifiDirectService = WiFiDirectService(application)
+    private val preferencesManager = PreferencesManager(application)
 
     private val _username = MutableStateFlow<String?>(null)
     val username: StateFlow<String?> = _username.asStateFlow()
@@ -34,51 +41,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _currentPermissionRequest = MutableStateFlow<String?>(Manifest.permission.ACCESS_FINE_LOCATION)
     val currentPermissionRequest: StateFlow<String?> = _currentPermissionRequest.asStateFlow()
 
-    // Expose the StateFlows from BluetoothService
-    val connectionState: StateFlow<ConnectionState> = bluetoothService.connectionState
-    val discoveredDevices: StateFlow<List<BluetoothDeviceInfo>> = bluetoothService.discoveredDevices
-    val messages: StateFlow<List<Message>> = bluetoothService.messages
+    val connectionState: StateFlow<ConnectionState> = wifiDirectService.connectionState
+    private val _discoveredDevices = MutableStateFlow<List<DeviceInfo>>(emptyList())
+    val discoveredDevices: StateFlow<List<DeviceInfo>> = _discoveredDevices.asStateFlow()
+    val messages: StateFlow<List<Message>> = wifiDirectService.messages
+
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private val preferencesManager = PreferencesManager(application)
 
     init {
-        // Monitor connection state changes
         viewModelScope.launch {
             connectionState.collect { state ->
                 when (state) {
-                    is ConnectionState.Scanning -> _isScanning.value = true
-                    is ConnectionState.Connected -> _isScanning.value = false
-                    is ConnectionState.Disconnected -> _isScanning.value = false
                     is ConnectionState.Error -> {
-                        _isScanning.value = false
+                        if (state.message == "Missing required permissions") {
+                            // Start permission request flow again
+                            _currentPermissionRequest.value = Manifest.permission.ACCESS_FINE_LOCATION
+                        }
                     }
+                    else -> { /* Handle other states */ }
                 }
             }
         }
+    }
 
-        setupNetworkCallback()
+    fun retryConnection() {
+        _currentPermissionRequest.value = Manifest.permission.ACCESS_FINE_LOCATION
+    }
+
+    fun resetPermissionState() {
+        _currentPermissionRequest.value = Manifest.permission.ACCESS_FINE_LOCATION
     }
 
     fun onPermissionGranted(permission: String) {
         when (permission) {
             Manifest.permission.ACCESS_FINE_LOCATION -> {
-                _currentPermissionRequest.value = Manifest.permission.BLUETOOTH_SCAN
-            }
-            Manifest.permission.BLUETOOTH_SCAN -> {
-                _currentPermissionRequest.value = Manifest.permission.BLUETOOTH_CONNECT
-            }
-            Manifest.permission.BLUETOOTH_CONNECT -> {
-                _currentPermissionRequest.value = null
-                onAllPermissionsGranted()
+                if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+                    _currentPermissionRequest.value = null
+                    onAllPermissionsGranted()
+                } else {
+                    // If not actually granted, keep asking
+                    _currentPermissionRequest.value = Manifest.permission.ACCESS_FINE_LOCATION
+                }
             }
         }
     }
 
+    private fun hasPermission(permission: String): Boolean {
+        return ActivityCompat.checkSelfPermission(
+            getApplication(),
+            permission
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun verifyPermissions() {
+        if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            _currentPermissionRequest.value = Manifest.permission.ACCESS_FINE_LOCATION
+        }
+    }
+
+
+
+
     private fun onAllPermissionsGranted() {
         viewModelScope.launch {
-            val username = preferencesManager.getUsername()
-            _username.value = username
-            _uiState.value = if (username != null) {
+            val savedUsername = preferencesManager.getUsername()
+            _username.value = savedUsername
+            _uiState.value = if (savedUsername != null) {
                 startScanning()
                 UiState.Chat
             } else {
@@ -95,24 +123,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startScanning() {
+        // Check permission before starting scan
+        if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            _currentPermissionRequest.value = Manifest.permission.ACCESS_FINE_LOCATION
+            return
+        }
         viewModelScope.launch {
-            bluetoothService.startDiscovery()
+            wifiDirectService.startDiscovery()
             _isScanning.value = true
         }
     }
 
     fun stopScanning() {
         viewModelScope.launch {
-            bluetoothService.stopDiscovery()
+            wifiDirectService.stopDiscovery()
             _isScanning.value = false
         }
     }
 
-    fun connectToDevice(deviceAddress: String) {
+    fun connectToDevice(deviceInfo: DeviceInfo) {
         viewModelScope.launch {
-            bluetoothService.connectToDevice(deviceAddress)
+            wifiDirectService.connectToDevice(deviceInfo)
         }
     }
+
+
 
     fun sendMessage(receiverUsername: String, content: String) {
         val currentUsername = _username.value ?: return
@@ -122,13 +157,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             content = content
         )
         viewModelScope.launch {
-            bluetoothService.sendMessage(message)
+            wifiDirectService.sendMessage(message)
         }
     }
 
-    fun retryConnection(deviceAddress: String) {
-        stopScanning()
-        connectToDevice(deviceAddress)
+    private fun setupNetworkCallback() {
+        val connectivityManager = getApplication<Application>()
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                wifiDirectService.updateInternetConnection(true)
+            }
+
+            override fun onLost(network: Network) {
+                wifiDirectService.updateInternetConnection(false)
+            }
+        }
+
+        val networkRequest = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+
+        connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
     }
 
     override fun onCleared() {
@@ -138,28 +189,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             connectivityManager.unregisterNetworkCallback(it)
         }
-        bluetoothService.cleanup()
-    }
-
-    private fun setupNetworkCallback() {
-        val connectivityManager = getApplication<Application>()
-            .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-
-        networkCallback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                bluetoothService.updateInternetConnection(true)
-            }
-
-            override fun onLost(network: Network) {
-                bluetoothService.updateInternetConnection(false)
-            }
-        }
-
-        val networkRequest = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-
-        connectivityManager.registerNetworkCallback(networkRequest, networkCallback!!)
+        wifiDirectService.cleanup()
     }
 
     sealed class UiState {
