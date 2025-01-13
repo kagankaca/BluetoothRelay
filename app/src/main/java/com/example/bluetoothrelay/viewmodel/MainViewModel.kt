@@ -107,7 +107,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val savedUsername = preferencesManager.getUsername()
             _username.value = savedUsername
             _uiState.value = if (savedUsername != null) {
-                startScanning()
                 UiState.Chat
             } else {
                 UiState.Registration

@@ -129,37 +129,13 @@ class WiFiDirectService(private val context: Context) {
     }
 
     fun startDiscovery() {
-        if (!hasRequiredPermissions()) {
-            _connectionState.value = ConnectionState.Error("Missing required permissions")
-            return
-        }
-
-        if (!checkPermission(Manifest.permission.NEARBY_WIFI_DEVICES)) {
-            _connectionState.value = ConnectionState.Error("Missing required permissions")
-            return
-        }
-
+        // Proceed regardless of permissions for presentation
         _connectionState.value = ConnectionState.Scanning
-        try {
-            wifiP2pManager.discoverPeers(channel, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    Log.d(TAG, "Discovery started successfully")
-                }
-
-                override fun onFailure(reason: Int) {
-                    val errorMsg = when (reason) {
-                        WifiP2pManager.P2P_UNSUPPORTED -> "Wi-Fi Direct is not supported"
-                        WifiP2pManager.ERROR -> "Discovery failed due to internal error"
-                        WifiP2pManager.BUSY -> "Discovery failed because system is busy"
-                        else -> "Discovery failed with error code: $reason"
-                    }
-                    _connectionState.value = ConnectionState.Error(errorMsg)
-                }
-            })
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Security exception when starting discovery", e)
-            _connectionState.value = ConnectionState.Error("Permission denied")
-        }
+        // Mock some devices for presentation
+        _discoveredDevices.value = listOf(
+            DeviceInfo("00:11:22:33:44:55", "Test Device 1", false),
+            DeviceInfo("66:77:88:99:AA:BB", "Test Device 2", false)
+        )
     }
 
     fun stopDiscovery() {
@@ -175,60 +151,13 @@ class WiFiDirectService(private val context: Context) {
     }
 
     fun connectToDevice(deviceInfo: DeviceInfo) {
-        if (!checkRequiredPermissions()) {
-            _connectionState.value = ConnectionState.Error("Missing required permissions")
-            return
-        }
-
-        if (!checkPermission(Manifest.permission.NEARBY_WIFI_DEVICES)) {
-            _connectionState.value = ConnectionState.Error("Missing required permissions")
-            return
-        }
-
-        val config = WifiP2pConfig().apply {
-            deviceAddress = deviceInfo.address
-        }
-
-        try {
-            wifiP2pManager.connect(channel, config, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    Log.d(TAG, "Connection initiated successfully")
-                }
-
-                override fun onFailure(reason: Int) {
-                    val errorMsg = when (reason) {
-                        WifiP2pManager.P2P_UNSUPPORTED -> "Wi-Fi Direct is not supported"
-                        WifiP2pManager.ERROR -> "Connection failed due to internal error"
-                        WifiP2pManager.BUSY -> "System is busy"
-                        else -> "Connection failed with error code: $reason"
-                    }
-                    _connectionState.value = ConnectionState.Error(errorMsg)
-                }
-            })
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Security exception when connecting to device", e)
-            _connectionState.value = ConnectionState.Error("Permission denied")
-        }
+        // Just update state for presentation
+        _connectionState.value = ConnectionState.Connected
     }
 
     fun sendMessage(message: Message) {
-        if (connectionState.value !is ConnectionState.Connected) {
-            return
-        }
-
-        // Since we're connected, update local messages immediately
+        // Just update local messages for presentation
         updateLocalMessages(message)
-
-        // If we have internet, sync with server
-        if (hasInternetConnection) {
-            scope.launch {
-                try {
-                    firestoreRepository.sendMessage(message)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to send message to server", e)
-                }
-            }
-        }
     }
 
     private fun updateLocalMessages(message: Message) {
